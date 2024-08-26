@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-github_api_url=$1
-github_repo=$2
-github_token=$3
-release_id=$4
+while getopts "r:t:d:" opt; do
+  case $opt in
+    r) repo="$OPTARG" ;;
+    t) token="$OPTARG" ;;
+    d) older_than="$OPTARG" ;;
+    \?) echo "Invalid option -$OPTARG" >&2 ; exit 1 ;;
+  esac
+done
 
-repo_api="$github_api_url/repos/$github_repo"
-auth_header="authorization: Bearer $github_token"
+repo_api="https://api.github.com/repos/$repo"
+auth_header="authorization: Bearer $token"
 
 function sort_age_desc { jq 'sort_by(.id) | reverse'; }
 
-# Prune fields and squash each release to one line, for streaming onwards.
-function split_releases { jq -c '.[] | {id, name, draft}'; }
+function split_releases { jq -c '.[] | {id, name, draft,created_at}'; }
 
 function delete_old_drafts {
   start_deleting=false
@@ -20,18 +23,17 @@ function delete_old_drafts {
     id=$(jq '.id' <<< "$release")
     name=$(jq '.name' <<< "$release")
     draft=$(jq '.draft' <<< "$release")
+    created_at=$(jq '.created_at' <<< "$release" | xargs -I{} date --date="{}" +"%s")
+    echo $name
+    echo $draft
 
-    if [ "$start_deleting" = true ]; then
-      if [ "$draft" = true ]; then
-        echo "Deleting draft release $id ($name)"
-        curl -# -XDELETE -H "$auth_header" "$repo_api/releases/$id"
-      fi
-      continue
-    fi
+    today=$(date)
+    expiring_date=$(date --date="today $older_than days ago" +%s)
 
-    if [ "$id" = "$release_id" ]; then
-      start_deleting=true
-      echo "Found release $id ($name)"
+    echo "$(date --date=@${created_at})"
+    echo "$(date --date=@${expiring_date})"
+    if [[ "$created_at" -le "$expiring_date" && "$draft" = true ]]; then
+      echo "Deleting draft release $id ($name)"
     fi
   done
 }
